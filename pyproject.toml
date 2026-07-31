@@ -1,9 +1,42 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "borecli"
 version = "1.0.0"
-description = "Expose localhost through BoreHook"
+description = "Official BoreHook CLI for securely exposing localhost through BoreHook."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
+
+authors = [
+    { name = "Chinonso Egwuaka", email = "chinonso_patrick@yahoo.com" }
+]
+
+license = { text = "MIT" }
+
+keywords = [
+    "borehook",
+    "tunnel",
+    "localhost",
+    "webhook",
+    "cli",
+    "proxy"
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet",
+    "Topic :: Software Development",
+    "Environment :: Console",
+]
 
 dependencies = [
     "click>=8.1.7",
@@ -12,5 +45,17 @@ dependencies = [
     "websockets>=15.0",
 ]
 
+[project.urls]
+Homepage = "https://borehook.com"
+Documentation = "https://borehook.com/docs"
+Repository = "https://github.com/CHI-NONSO1/borecli"
+Issues = "https://github.com/CHI-NONSO1/borecli/issues"
+
 [project.scripts]
 bore = "bore.cli:cli"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["bore*"]
