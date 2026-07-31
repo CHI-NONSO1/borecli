@@ -46,13 +46,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build executable
-        run: |
-          pyinstaller \
-            --clean \
-            --onefile \
-            --name bore \
-            bore/cli.py
-
+        run: pyinstaller --clean --onefile --name bore bore/cli.py
       #
       # Create release directory
       #
