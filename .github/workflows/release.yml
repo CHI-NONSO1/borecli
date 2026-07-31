@@ -10,29 +10,32 @@ permissions:
 
 jobs:
   build:
-
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
+            platform: linux
             executable: bore
-            archive: bore-linux.tar.gz
 
           - os: macos-latest
+            platform: macos
             executable: bore
-            archive: bore-macos.tar.gz
 
           - os: windows-latest
+            platform: windows
             executable: bore.exe
-            archive: bore-windows.zip
 
     runs-on: ${{ matrix.os }}
 
+    env:
+      VERSION: ${{ github.ref_name }}
+
     steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -44,70 +47,101 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --onefile bore/cli.py --name bore
+          pyinstaller \
+            --clean \
+            --onefile \
+            --name bore \
+            bore/cli.py
 
       #
-      # Create release folder
+      # Create release directory
       #
 
       - name: Prepare package (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          mkdir package
-          cp dist/${{ matrix.executable }} package/
-          cp README.md package/
-          cp LICENSE package/
+          PACKAGE="bore-${VERSION}-${{ matrix.platform }}"
+
+          mkdir "$PACKAGE"
+
+          cp "dist/${{ matrix.executable }}" "$PACKAGE/"
+          cp README.md "$PACKAGE/"
+          cp LICENSE "$PACKAGE/"
+
+          echo "${VERSION}" > "$PACKAGE/VERSION"
 
       - name: Prepare package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item package -ItemType Directory
+          $package = "bore-$env:VERSION-${{ matrix.platform }}"
 
-          Copy-Item dist\bore.exe package\
-          Copy-Item README.md package\
-          Copy-Item LICENSE package\
+          New-Item $package -ItemType Directory
+
+          Copy-Item dist\bore.exe $package\
+          Copy-Item README.md $package\
+          Copy-Item LICENSE $package\
+
+          Set-Content `
+            -Path "$package\VERSION" `
+            -Value $env:VERSION
 
       #
-      # Compress
+      # Archive
       #
 
       - name: Archive Linux/macOS
         if: runner.os != 'Windows'
         run: |
-          tar -czf dist/${{ matrix.archive }} -C package .
+          PACKAGE="bore-${VERSION}-${{ matrix.platform }}"
+
+          tar -czf \
+            "dist/${PACKAGE}.tar.gz" \
+            "$PACKAGE"
 
       - name: Archive Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $package = "bore-$env:VERSION-${{ matrix.platform }}"
+
           Compress-Archive `
-            -Path package\* `
-            -DestinationPath dist\bore-windows.zip
+            -Path "$package" `
+            -DestinationPath "dist\$package.zip"
 
       #
-      # Upload
+      # Upload artifact
       #
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.archive }}
-          path: dist/${{ matrix.archive }}
+          name: bore-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
 
   release:
+    name: Publish GitHub Release
 
     needs: build
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
 
-      - uses: actions/download-artifact@v4
+      - name: Display downloaded files
+        run: find .
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
           files: |
-            bore-linux.tar.gz/bore-linux.tar.gz
-            bore-macos.tar.gz/bore-macos.tar.gz
-            bore-windows.zip/bore-windows.zip
+            **/*.zip
+            **/*.tar.gz
