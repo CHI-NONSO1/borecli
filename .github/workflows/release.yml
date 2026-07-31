@@ -15,16 +15,16 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: bore-linux
-            executable: dist/bore
-
-          - os: windows-latest
-            artifact: bore-windows
-            executable: dist/bore.exe
+            executable: bore
+            archive: bore-linux.tar.gz
 
           - os: macos-latest
-            artifact: bore-macos
-            executable: dist/bore
+            executable: bore
+            archive: bore-macos.tar.gz
+
+          - os: windows-latest
+            executable: bore.exe
+            archive: bore-windows.zip
 
     runs-on: ${{ matrix.os }}
 
@@ -46,11 +46,53 @@ jobs:
         run: |
           pyinstaller --onefile bore/cli.py --name bore
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      #
+      # Create release folder
+      #
+
+      - name: Prepare package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir package
+          cp dist/${{ matrix.executable }} package/
+          cp README.md package/
+          cp LICENSE package/
+
+      - name: Prepare package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item package -ItemType Directory
+
+          Copy-Item dist\bore.exe package\
+          Copy-Item README.md package\
+          Copy-Item LICENSE package\
+
+      #
+      # Compress
+      #
+
+      - name: Archive Linux/macOS
+        if: runner.os != 'Windows'
+        run: |
+          tar -czf dist/${{ matrix.archive }} -C package .
+
+      - name: Archive Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path package\* `
+            -DestinationPath dist\bore-windows.zip
+
+      #
+      # Upload
+      #
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.executable }}
+          name: ${{ matrix.archive }}
+          path: dist/${{ matrix.archive }}
 
   release:
 
@@ -60,13 +102,12 @@ jobs:
 
     steps:
 
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
 
-      - name: Create GitHub Release
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            bore-linux/bore
-            bore-windows/bore.exe
-            bore-macos/bore
+            bore-linux.tar.gz/bore-linux.tar.gz
+            bore-macos.tar.gz/bore-macos.tar.gz
+            bore-windows.zip/bore-windows.zip
