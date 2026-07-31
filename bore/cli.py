@@ -16,9 +16,9 @@ from bore.config import (
     is_authenticated,
     get_remaining_session_time,
 )
-from .parse_duration import parse_duration
+from bore.parse_duration import parse_duration
 
-from .auth import (
+from bore.auth import (
     login,
     logout,
 )
@@ -373,3 +373,6 @@ def connect():
         click.echo(
             "👋 Bore client stopped."
         )
+        
+if __name__ == "__main__":
+    cli()

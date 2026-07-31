@@ -1,4 +1,6 @@
+altgraph==0.17.5
 anyio==4.14.2
+-e git+https://github.com/CHI-NONSO1/borecli.git@601ee83aa62a4c2c21ab80180b05fff454bc0b43#egg=borecli
 certifi==2026.7.22
 charset-normalizer==3.4.9
 click==8.4.2
@@ -7,6 +9,12 @@ h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.18
+packaging==26.2
+pefile==2024.8.26
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+pywin32-ctypes==0.2.3
 requests==2.34.2
+setuptools==83.0.0
 urllib3==2.7.0
 websockets==17.0
