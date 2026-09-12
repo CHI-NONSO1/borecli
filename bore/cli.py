@@ -22,6 +22,7 @@ from bore.auth import (
     login,
     logout,
  BoreAuthError,
+
 )
 
 from bore.tunnel.client import TunnelClient
@@ -53,7 +54,6 @@ def request_shutdown(signum=None, frame=None):
 @click.group()
 def cli():
     pass
-
 
 
 @cli.command(name="login")
@@ -98,6 +98,7 @@ def login_cmd(email, password, time):
         )
         raise click.exceptions.Exit(1)
 
+
     except BoreAuthError as exc:
         click.echo(
             f"\n❌ {exc}",
@@ -116,6 +117,21 @@ def login_cmd(email, password, time):
 
 
 
+    except BoreAuthError as exc:
+        click.echo(
+            f"\n❌ {exc}",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
+
+    except Exception:
+        # Never print the raw exception because it may contain
+        # the API URL, internal paths, or other implementation details.
+        click.echo(
+            "\n❌ Unable to log in. Please try again later.",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
 
 
 @cli.command()
