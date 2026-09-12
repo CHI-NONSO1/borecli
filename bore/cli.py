@@ -21,6 +21,7 @@ from bore.parse_duration import parse_duration
 from bore.auth import (
     login,
     logout,
+ BoreAuthError,
 )
 
 from bore.tunnel.client import TunnelClient
@@ -54,7 +55,7 @@ def cli():
     pass
 
 
-    
+
 @cli.command(name="login")
 @click.option("--email", prompt=True)
 @click.option(
@@ -76,7 +77,6 @@ def login_cmd(email, password, time):
         return
 
     try:
-
         if time:
             lifetime = parse_duration(time)
         else:
@@ -92,10 +92,29 @@ def login_cmd(email, password, time):
         click.echo(f"Account: {session['email']}")
 
     except ValueError as exc:
-        click.echo(f"\n❌ Invalid time: {exc}")
+        click.echo(
+            f"\n❌ Invalid time: {exc}",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
 
-    except Exception as exc:
-        click.echo(f"\n❌ {exc}")
+    except BoreAuthError as exc:
+        click.echo(
+            f"\n❌ {exc}",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
+
+    except Exception:
+        # Never print the raw exception because it may contain
+        # the API URL, internal paths, or other implementation details.
+        click.echo(
+            "\n❌ Unable to log in. Please try again later.",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
+
+
 
 
 
