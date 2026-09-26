@@ -1,6 +1,5 @@
-# borecli/bore/tunnel/heartbeat.py
-
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -22,6 +21,10 @@ class Heartbeat:
     - Record pong replies
     - Detect dead connections
     - Allow the tunnel client to reconnect
+
+    The heartbeat is deliberately defensive around WebSocket shutdown.
+    The main tunnel connection may close the WebSocket at the same time
+    that this task is sending a ping or detecting a timeout.
     """
 
     def __init__(
@@ -49,9 +52,10 @@ class Heartbeat:
         if self._running:
             return
 
-        logger.info("Heartbeat started")
-
         self._running = True
+        self._last_pong = time.monotonic()
+
+        logger.info("Heartbeat started")
 
         self._task = asyncio.create_task(
             self._run(),
@@ -61,19 +65,31 @@ class Heartbeat:
     async def stop(self):
         """
         Stop the heartbeat loop.
+
+        Cancellation is intentionally handled here so that shutdown of
+        the tunnel does not produce noisy asyncio cancellation errors.
         """
+
+        if not self._running and self._task is None:
+            return
 
         self._running = False
 
-        if self._task:
+        task = self._task
+        self._task = None
 
-            self._task.cancel()
+        if task is not None:
+            current_task = asyncio.current_task()
 
-            try:
-                await self._task
+            # Never await/cancel ourselves.
+            if task is not current_task:
+                task.cancel()
 
-            except asyncio.CancelledError:
-                pass
+                with contextlib.suppress(
+                    asyncio.CancelledError,
+                    Exception,
+                ):
+                    await task
 
         logger.info("Heartbeat stopped")
 
@@ -87,15 +103,38 @@ class Heartbeat:
 
         logger.debug("Heartbeat pong")
 
+    async def _close_websocket(self):
+        """
+        Close the WebSocket safely.
+
+        The main tunnel task may already have closed the connection.
+        WebSocket shutdown is therefore treated as best-effort and
+        shutdown-related exceptions are intentionally suppressed.
+        """
+
+        try:
+            await self.websocket.close()
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception as exc:
+            logger.debug(
+                "WebSocket already closed or unavailable during heartbeat shutdown: %s",
+                exc,
+            )
+
     async def _run(self):
         """
         Internal heartbeat loop.
+
+        Any WebSocket failure causes the heartbeat task to stop. The
+        main tunnel connection manager remains responsible for deciding
+        whether the tunnel should reconnect.
         """
 
-        while self._running:
-
-            try:
-
+        try:
+            while self._running:
                 #
                 # Send ping
                 #
@@ -104,9 +143,24 @@ class Heartbeat:
                     MessageType.PING,
                 )
 
-                await self.websocket.send(
-                    json.dumps(frame),
-                )
+                try:
+                    await self.websocket.send(
+                        json.dumps(frame),
+                    )
+
+                except asyncio.CancelledError:
+                    raise
+
+                except Exception as exc:
+                    # A concurrent WebSocket shutdown is expected during
+                    # normal tunnel teardown. Do not turn it into a
+                    # user-facing error.
+                    logger.debug(
+                        "Heartbeat ping could not be sent: %s",
+                        exc,
+                    )
+
+                    break
 
                 logger.debug("Heartbeat ping")
 
@@ -120,35 +174,40 @@ class Heartbeat:
                 )
 
                 if elapsed > self.timeout:
-
                     logger.warning(
-                        "Heartbeat timeout "
-                        "(%.1fs)",
+                        "Heartbeat timeout (%.1fs)",
                         elapsed,
                     )
 
-                    await self.websocket.close()
+                    self._running = False
+
+                    await self._close_websocket()
 
                     break
+
+                #
+                # Wait before sending the next ping.
+                #
+                # asyncio.sleep() is cancellable, allowing stop() to
+                # terminate the heartbeat promptly.
+                #
 
                 await asyncio.sleep(
                     self.interval,
                 )
 
-            except asyncio.CancelledError:
-                break
+        except asyncio.CancelledError:
+            # Normal during tunnel shutdown/reconnect.
+            self._running = False
+            raise
 
-            except Exception as exc:
+        except Exception as exc:
+            self._running = False
 
-                logger.exception(
-                    "Heartbeat error: %s",
-                    exc,
-                )
+            logger.debug(
+                "Heartbeat stopped due to WebSocket error: %s",
+                exc,
+            )
 
-                try:
-                    await self.websocket.close()
-
-                except Exception:
-                    pass
-
-                break
+        finally:
+            self._running = False

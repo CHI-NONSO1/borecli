@@ -1,9 +1,9 @@
-
 # borecli/bore/handlers/websocket_handler.py
 
 import asyncio
 import base64
 import logging
+
 import click
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -14,18 +14,70 @@ from bore.frames import (
     make_ws_close,
     send_frame,
 )
-
 from bore.protocol import MessageType
 
 
 logger = logging.getLogger(__name__)
 
 
-#
+# ============================================================
 # Prevent concurrent websocket frame corruption
-#
+# ============================================================
+
 SEND_LOCK = asyncio.Lock()
 
+
+# ============================================================
+# Safe BoreHook websocket sender
+# ============================================================
+
+async def safe_send_frame(
+    websocket,
+    frame,
+):
+    """
+    Safely send a frame to the BoreHook websocket.
+
+    A relay task can still be processing a message when the
+    BoreHook websocket closes. In that situation, attempting
+    to send another frame raises ConnectionClosed.
+
+    This helper treats that condition as normal connection
+    teardown instead of allowing it to become an unhandled
+    task exception.
+    """
+
+    try:
+
+        async with SEND_LOCK:
+
+            await send_frame(
+                websocket,
+                frame,
+            )
+
+        return True
+
+    except ConnectionClosed:
+
+        logger.debug(
+            "BoreHook websocket closed while sending frame."
+        )
+
+        return False
+
+    except Exception:
+
+        logger.exception(
+            "Failed to send websocket frame."
+        )
+
+        return False
+
+
+# ============================================================
+# WebSocket connection manager
+# ============================================================
 
 class WebSocketConnectionManager:
     """
@@ -44,7 +96,6 @@ class WebSocketConnectionManager:
 
         self._relay_tasks = {}
 
-
     def get(
         self,
         connection_id,
@@ -54,14 +105,12 @@ class WebSocketConnectionManager:
             connection_id
         )
 
-
     def exists(
         self,
         connection_id,
     ):
 
         return connection_id in self._connections
-
 
     def register(
         self,
@@ -73,7 +122,6 @@ class WebSocketConnectionManager:
             connection_id
         ] = websocket
 
-
     def register_task(
         self,
         connection_id,
@@ -83,7 +131,6 @@ class WebSocketConnectionManager:
         self._relay_tasks[
             connection_id
         ] = task
-
 
     async def remove(
         self,
@@ -98,7 +145,6 @@ class WebSocketConnectionManager:
             connection_id,
             None,
         )
-
 
         if (
             task
@@ -117,11 +163,9 @@ class WebSocketConnectionManager:
 
             except Exception:
 
-                logger.debug(
-                    "Relay shutdown failed.",exc_info=True
+                logger.exception(
+                    "Relay shutdown failed."
                 )
-                
-
 
         #
         # Close local websocket
@@ -132,7 +176,6 @@ class WebSocketConnectionManager:
             None,
         )
 
-
         if websocket:
 
             try:
@@ -141,9 +184,10 @@ class WebSocketConnectionManager:
 
             except Exception:
 
-                pass
-
-
+                logger.debug(
+                    "Local websocket was already closed.",
+                    exc_info=True,
+                )
 
     async def shutdown(self):
 
@@ -158,20 +202,21 @@ class WebSocketConnectionManager:
             )
 
 
-#
+# ============================================================
 # Global websocket manager
-#
+# ============================================================
 
 manager = WebSocketConnectionManager()
 
-# ------------------------------------------------------------
+
+# ============================================================
 # Connect localhost websocket
-# ------------------------------------------------------------
+# ============================================================
 
 async def handle_ws_connect(
     *,
     websocket,
-     local_port,
+    local_port,
     frame,
 ):
     """
@@ -195,15 +240,13 @@ async def handle_ws_connect(
         "",
     )
 
-
     if not connection_id or not local_port:
 
         logger.error(
-            "Invalid ws.connect frame"
+            "Invalid ws.connect frame."
         )
 
         return
-
 
     #
     # Prevent duplicate connections
@@ -212,13 +255,11 @@ async def handle_ws_connect(
     if manager.exists(connection_id):
 
         logger.warning(
-            "Websocket already exists: %s",
+            "Websocket connection already exists: %s",
             connection_id,
         )
 
         return
-
-
 
     #
     # Build localhost websocket URL
@@ -230,12 +271,9 @@ async def handle_ws_connect(
         f"{path}"
     )
 
-
     if query:
 
         url += f"?{query}"
-
-
 
     #
     # Copy safe headers
@@ -245,7 +283,6 @@ async def handle_ws_connect(
         "headers",
         {},
     )
-
 
     excluded_headers = {
 
@@ -259,8 +296,6 @@ async def handle_ws_connect(
         "sec-websocket-protocol",
 
     }
-
-
 
     headers = [
 
@@ -276,8 +311,6 @@ async def handle_ws_connect(
 
     ]
 
-
-
     #
     # Rewrite local headers
     #
@@ -289,7 +322,6 @@ async def handle_ws_connect(
         )
     )
 
-
     headers.append(
         (
             "Origin",
@@ -297,14 +329,10 @@ async def handle_ws_connect(
         )
     )
 
-
-
-    logger.info(
-        "Connecting local websocket %s",
+    logger.debug(
+        "Connecting local websocket: %s",
         url,
     )
-
-
 
     #
     # Connect to local websocket server
@@ -324,41 +352,35 @@ async def handle_ws_connect(
 
         )
 
-
     except Exception:
 
-        logger.debug("Local websocket connection failed.", exc_info=True)
+        logger.exception(
+            "Unable to connect to local websocket."
+        )
 
         click.secho(
-            f"⚠️  Request received, but nothing is listening on "
-            f"127.0.0.1:{local_port} — is your local app running?",
+            "⚠️  Unable to connect to your local application. "
+            "Make sure it is running and accepting WebSocket connections.",
             fg="yellow",
         )
 
+        await safe_send_frame(
 
-        async with SEND_LOCK:
+            websocket,
 
-            await send_frame(
+            make_ws_close(
 
-                websocket,
+                connection_id=connection_id,
 
-                make_ws_close(
+                code=1011,
 
-                    connection_id=connection_id,
+                reason="Unable to connect localhost websocket",
 
-                    code=1011,
+            ),
 
-                    reason=
-                    "Unable to connect localhost websocket",
-
-                ),
-
-            )
-
+        )
 
         return
-
-
 
     #
     # Register connection
@@ -372,29 +394,31 @@ async def handle_ws_connect(
 
     )
 
-
-
     #
     # Tell server websocket is ready
     #
 
-    async with SEND_LOCK:
+    connected = await safe_send_frame(
 
-        await send_frame(
+        websocket,
 
-            websocket,
+        make_frame(
 
-            make_frame(
+            MessageType.WS_CONNECTED,
 
-                MessageType.WS_CONNECTED,
+            connection_id=connection_id,
 
-                connection_id=connection_id,
+        ),
 
-            ),
+    )
 
+    if not connected:
+
+        await manager.remove(
+            connection_id
         )
 
-
+        return
 
     #
     # Start localhost -> BoreHook relay
@@ -414,7 +438,6 @@ async def handle_ws_connect(
 
     )
 
-
     manager.register_task(
 
         connection_id,
@@ -423,18 +446,15 @@ async def handle_ws_connect(
 
     )
 
-
-    logger.info(
-
-        "Websocket connected: %s",
-
+    logger.debug(
+        "Websocket connection established: %s",
         connection_id,
-
     )
-    
-    # ------------------------------------------------------------
+
+
+# ============================================================
 # Relay localhost websocket -> BoreHook server
-# ------------------------------------------------------------
+# ============================================================
 
 async def relay_local_to_server(
     *,
@@ -452,20 +472,17 @@ async def relay_local_to_server(
                 |
                 |
                 v
-
         BoreHook websocket
     """
 
-    logger.info(
+    logger.debug(
         "Starting websocket relay: %s",
         connection_id,
     )
 
-
     try:
 
         async for message in local_ws:
-
 
             #
             # Binary websocket message
@@ -476,14 +493,12 @@ async def relay_local_to_server(
                 bytes,
             ):
 
-
                 payload = (
                     base64.b64encode(
                         message
                     )
                     .decode("ascii")
                 )
-
 
                 frame = make_ws_message(
 
@@ -495,13 +510,11 @@ async def relay_local_to_server(
 
                 )
 
-
             #
             # Text websocket message
             #
 
             else:
-
 
                 frame = make_ws_message(
 
@@ -513,131 +526,76 @@ async def relay_local_to_server(
 
                 )
 
-
-
             #
-            # Send safely
+            # Safely send to BoreHook.
+            #
+            # If the BoreHook websocket has already closed,
+            # stop the relay without attempting another send.
             #
 
-            async with SEND_LOCK:
-
-                await send_frame(
-
-                    websocket,
-
-                    frame,
-
-                )
-
-
-
-    except ConnectionClosed as exc:
-
-
-        logger.info(
-
-            "Local websocket closed %s (%s)",
-
-            connection_id,
-
-            exc.code,
-
-        )
-
-
-        async with SEND_LOCK:
-
-            await send_frame(
+            sent = await safe_send_frame(
 
                 websocket,
 
-                make_ws_close(
-
-                    connection_id=connection_id,
-
-                    code=exc.code,
-
-                    reason=(
-                        exc.reason
-                        or ""
-                    ),
-
-                ),
+                frame,
 
             )
 
+            if not sent:
 
+                logger.debug(
+                    "BoreHook websocket is closed; "
+                    "stopping local websocket relay: %s",
+                    connection_id,
+                )
+
+                break
+
+    except ConnectionClosed as exc:
+
+        logger.debug(
+            "Local websocket closed: %s (code=%s)",
+            connection_id,
+            exc.code,
+        )
 
     except asyncio.CancelledError:
 
-
-        logger.info(
-
-            "Relay cancelled: %s",
-
+        logger.debug(
+            "Websocket relay cancelled: %s",
             connection_id,
-
         )
 
         raise
 
-
-
     except Exception:
-        logger.debug("Websocket relay failed.", exc_info=True)
 
-        click.secho(
-            f"⚠️  Websocket relay failed:{connection_id}",
-            fg="yellow",
+        logger.exception(
+            "Unexpected websocket relay failure: %s",
+            connection_id,
         )
 
-
-        try:
-
-            async with SEND_LOCK:
-
-                await send_frame(
-
-                    websocket,
-
-                    make_ws_close(
-
-                        connection_id=connection_id,
-
-                        code=1011,
-
-                        reason="Relay failure",
-
-                    ),
-
-                )
-
-        except Exception:
-
-            pass
-
-
+        #
+        # Do not expose internal exception details to the user.
+        #
+        # The connection will be cleaned up in finally.
+        #
 
     finally:
 
-
         await manager.remove(
-
             connection_id
-
         )
 
-
-        logger.info(
-
-            "Relay stopped: %s",
-
+        logger.debug(
+            "Websocket relay stopped: %s",
             connection_id,
-
         )
-        # ------------------------------------------------------------
+
+
+# ============================================================
 # Relay BoreHook server -> localhost websocket
-# ------------------------------------------------------------
+# ============================================================
 
 async def handle_ws_message(
     *,
@@ -653,7 +611,6 @@ async def handle_ws_message(
                 |
                 |
                 v
-
         localhost websocket
     """
 
@@ -661,16 +618,13 @@ async def handle_ws_message(
         "connection_id"
     )
 
-
     if not connection_id:
 
         logger.warning(
-            "ws.message missing connection_id"
+            "ws.message missing connection_id."
         )
 
         return
-
-
 
     #
     # Find local websocket
@@ -680,36 +634,32 @@ async def handle_ws_message(
         connection_id
     )
 
-
     if local_ws is None:
 
-        logger.warning(
+        #
+        # A message may arrive after connection cleanup.
+        # This is a normal shutdown race, so do not expose it
+        # to the CLI user.
+        #
 
-            "Unknown websocket connection: %s",
-
+        logger.debug(
+            "Ignoring message for inactive websocket: %s",
             connection_id,
-
         )
 
         return
-
-
 
     binary = frame.get(
         "binary",
         False,
     )
 
-
     body = frame.get(
         "body",
         "",
     )
 
-
-
     try:
-
 
         #
         # Binary websocket frame
@@ -717,17 +667,13 @@ async def handle_ws_message(
 
         if binary:
 
-
             payload = base64.b64decode(
                 body
             )
 
-
             await local_ws.send(
                 payload
             )
-
-
 
         #
         # Text websocket frame
@@ -735,61 +681,41 @@ async def handle_ws_message(
 
         else:
 
-
             await local_ws.send(
                 body
             )
 
-
-
         logger.debug(
-
             "Forwarded websocket message: %s",
-
             connection_id,
-
         )
-
-
 
     except ConnectionClosed:
 
-
-        logger.info(
-
+        logger.debug(
             "Local websocket closed: %s",
-
             connection_id,
-
         )
-
 
         await manager.remove(
-
             connection_id
-
         )
-
-
 
     except Exception:
-        logger.debug("Unable to forward websocket message.", exc_info=True)
 
-        click.secho(
-            f"⚠️  Unable to forward websocket message",
-            fg="yellow",
+        logger.exception(
+            "Unable to forward websocket message: %s",
+            connection_id,
         )
-
 
         await manager.remove(
-
             connection_id
-
         )
-        
-        # ------------------------------------------------------------
+
+
+# ============================================================
 # Close localhost websocket
-# ------------------------------------------------------------
+# ============================================================
 
 async def handle_ws_close(
     *,
@@ -804,7 +730,6 @@ async def handle_ws_close(
             |
             |
             v
-
         localhost websocket close
     """
 
@@ -812,34 +737,27 @@ async def handle_ws_close(
         "connection_id"
     )
 
-
     if not connection_id:
 
         logger.warning(
-            "ws.close missing connection_id"
+            "ws.close missing connection_id."
         )
 
         return
-
-
 
     code = frame.get(
         "code",
         1000,
     )
 
-
     reason = frame.get(
         "reason",
         "",
     )
 
-
-
     local_ws = manager.get(
         connection_id
     )
-
 
     #
     # Already removed
@@ -847,33 +765,20 @@ async def handle_ws_close(
 
     if local_ws is None:
 
-
         logger.debug(
-
-            "Websocket already closed: %s",
-
+            "Websocket already removed: %s",
             connection_id,
-
         )
 
         return
 
-
-
-    logger.info(
-
-        "Closing websocket %s (%s)",
-
+    logger.debug(
+        "Closing local websocket: %s (code=%s)",
         connection_id,
-
         code,
-
     )
 
-
-
     try:
-
 
         await local_ws.close(
 
@@ -883,47 +788,32 @@ async def handle_ws_close(
 
         )
 
-
-
     except ConnectionClosed:
-
 
         pass
 
-
-
     except Exception:
-        logger.debug("Failed closing local websocket.", exc_info=True)
 
-        click.secho(
-            f"⚠️  Request received, but "
-            f"Failed closing local websocket",
-            fg="yellow",
+        logger.exception(
+            "Failed to close local websocket: %s",
+            connection_id,
         )
-
-
 
     finally:
 
-
         await manager.remove(
-
             connection_id
-
         )
 
-
-        logger.info(
-
+        logger.debug(
             "Websocket removed: %s",
-
             connection_id,
-
         )
-        
-        # ------------------------------------------------------------
+
+
+# ============================================================
 # Shutdown
-# ------------------------------------------------------------
+# ============================================================
 
 async def shutdown():
     """
@@ -932,35 +822,28 @@ async def shutdown():
     Called when TunnelClient stops.
     """
 
-    logger.info(
-        "Shutting down websocket handler..."
+    logger.debug(
+        "Shutting down websocket handler."
     )
-
 
     try:
 
         await manager.shutdown()
 
-
-        logger.info(
+        logger.debug(
             "All websocket connections closed."
         )
 
-
     except Exception:
-        
-        logger.debug("Websocket shutdown failed.", exc_info=True)
 
-        click.secho(
-            f"⚠️  Websocket shutdown failed",
-            fg="yellow",
+        logger.exception(
+            "Websocket shutdown failed."
         )
 
 
-
-# ------------------------------------------------------------
+# ============================================================
 # Public exports
-# ------------------------------------------------------------
+# ============================================================
 
 __all__ = [
 

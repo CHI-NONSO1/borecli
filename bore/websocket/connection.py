@@ -25,18 +25,31 @@ class ConnectionStats:
     messages_sent: int = 0
     messages_received: int = 0
 
-    created_at: float = field(default_factory=time.time)
-    last_activity: float = field(default_factory=time.time)
+    created_at: float = field(
+        default_factory=time.time,
+    )
+
+    last_activity: float = field(
+        default_factory=time.time,
+    )
 
     def sent(self, message):
-        size = len(message) if isinstance(message, bytes) else len(str(message))
+        size = (
+            len(message)
+            if isinstance(message, bytes)
+            else len(str(message))
+        )
 
         self.bytes_sent += size
         self.messages_sent += 1
         self.last_activity = time.time()
 
     def received(self, message):
-        size = len(message) if isinstance(message, bytes) else len(str(message))
+        size = (
+            len(message)
+            if isinstance(message, bytes)
+            else len(str(message))
+        )
 
         self.bytes_received += size
         self.messages_received += 1
@@ -56,33 +69,55 @@ class WebSocketConnection:
     """
     Represents one localhost websocket connection.
 
-    This class stores metadata only.
+    This class stores connection metadata and lifecycle state.
     """
 
     websocket: WebSocketClientProtocol
     url: str
 
-    connection_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    connection_id: str = field(
+        default_factory=lambda: str(uuid.uuid4())
+    )
 
     tunnel_id: Optional[str] = None
 
     state: ConnectionState = ConnectionState.CONNECTING
 
-    stats: ConnectionStats = field(default_factory=ConnectionStats)
+    stats: ConnectionStats = field(
+        default_factory=ConnectionStats
+    )
 
-    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    send_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock
+    )
 
-    metadata: dict = field(default_factory=dict)
+    close_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock
+    )
+
+    metadata: dict = field(
+        default_factory=dict
+    )
 
     @property
     def connected(self) -> bool:
-        return self.state == ConnectionState.CONNECTED
+        """
+        Return whether this connection is logically and physically
+        connected.
+        """
+
+        if self.state != ConnectionState.CONNECTED:
+            return False
+
+        return not self.websocket.closed
 
     def mark_connected(self):
-        self.state = ConnectionState.CONNECTED
+        if self.state == ConnectionState.CONNECTING:
+            self.state = ConnectionState.CONNECTED
 
     def mark_closing(self):
-        self.state = ConnectionState.CLOSING
+        if self.state != ConnectionState.CLOSED:
+            self.state = ConnectionState.CLOSING
 
     def mark_closed(self):
         self.state = ConnectionState.CLOSED

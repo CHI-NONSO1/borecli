@@ -39,9 +39,13 @@ class WebSocketFrame:
 
     connection_id: Optional[str] = None
 
-    timestamp: float = field(default_factory=time.time)
+    timestamp: float = field(
+        default_factory=time.time,
+    )
 
-    frame_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    frame_id: str = field(
+        default_factory=lambda: str(uuid.uuid4()),
+    )
 
     @property
     def is_text(self) -> bool:
@@ -56,11 +60,13 @@ class WebSocketFrame:
         if isinstance(self.payload, bytes):
             return len(self.payload)
 
-        return len(self.payload.encode())
+        return len(
+            self.payload.encode("utf-8")
+        )
 
     def as_json(self) -> Optional[Any]:
         """
-        Return parsed JSON if payload contains JSON.
+        Return parsed JSON if the payload contains valid JSON.
         """
 
         if not self.is_text:
@@ -68,7 +74,12 @@ class WebSocketFrame:
 
         try:
             return json.loads(self.payload)
-        except Exception:
+
+        except (
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             return None
 
     def serialize(self) -> dict:
@@ -77,8 +88,12 @@ class WebSocketFrame:
         """
 
         if self.is_binary:
-            payload = base64.b64encode(self.payload).decode()
+            payload = base64.b64encode(
+                self.payload
+            ).decode("ascii")
+
             encoding = "base64"
+
         else:
             payload = self.payload
             encoding = "utf-8"
